@@ -1,0 +1,8 @@
+# Arduino IDE build artifacts
+*.elf
+*.hex
+*.eep
+*.bin
+
+# Editor settings
+.vscode/
