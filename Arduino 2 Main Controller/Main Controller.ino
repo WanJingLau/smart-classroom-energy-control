@@ -178,8 +178,6 @@ void loop() {
     if (sensorLinkOk) {
       if (sensorMotion != lastReportedMotion) {
         lastReportedMotion = sensorMotion;
-        Serial.print(F("PIR changed: "));
-        Serial.println(sensorMotion ? 1 : 0);
       }
       const bool occupied = sensorPeople > 0;
       updateHvacActive(occupied, now);
