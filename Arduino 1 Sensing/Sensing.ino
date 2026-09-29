@@ -142,7 +142,7 @@ void loop() {
     daylightValue = readAverage(LDR_PIN);
     if (temperatureEnabled) {
       potentiometerRaw = readAverage(TEMPERATURE_PIN);
-      temperatureCentiC = convertTemperature(readAverage(TEMPERATURE_PIN));
+      temperatureCentiC = convertTemperature(potentiometerRaw);
       temperatureValid = true;
     }
   }

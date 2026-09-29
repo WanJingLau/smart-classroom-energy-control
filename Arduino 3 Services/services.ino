@@ -7,7 +7,8 @@ const uint8_t LIGHT_LED_PIN = 10;
 const uint8_t COOLING_LED_PIN = 9;
 const uint8_t HEATING_LED_PIN = 8;
 const uint8_t SERVO_PIN = 6;
-const uint8_t START_ANGLE = 20;
+const uint8_t BLIND_CLOSED_ANGLE = 90;
+const uint8_t START_ANGLE = 0; // Open at startup.
 const uint32_t COMMAND_TIMEOUT_MS = 2500;
 
 Servo blindServo;
@@ -72,6 +73,7 @@ void loop() {
     if (angle != blindAngle) {
       blindAngle = angle;
       blindServo.write(blindAngle);
+      Serial.print(F("Servo command D6=")); Serial.println(blindAngle);
     }
   }
   const bool timedOut = !haveCommand ||
@@ -83,9 +85,9 @@ void loop() {
 
   if (uint32_t(now - lastPrint) >= 1000) {
     lastPrint = now;
-    Serial.print(F("Light=")); Serial.print(timedOut ? 0 : lightCommand);
-    Serial.print(F(" HVAC=")); Serial.print(timedOut ? 0 : hvacCommand);
-    Serial.print(F(" Blind=")); Serial.print(blindAngle);
+    Serial.print(F("HVAC=")); Serial.print(timedOut ? 0 : hvacCommand);
+    Serial.print(F(" Blind=")); Serial.print(blindAngle == BLIND_CLOSED_ANGLE ? 1 : 0);
+    Serial.print(F(" Angle=")); Serial.print(blindAngle);
     if (timedOut) Serial.print(F(" COMMAND TIMEOUT"));
     Serial.println();
   }
