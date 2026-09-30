@@ -52,6 +52,7 @@ void setup() {
   blindServo.write(START_ANGLE);
   Wire.begin(SERVICE_ADDRESS);
   Wire.onReceive(receiveCommands);
+  Serial.println(); // Start each run on a fresh line in Serial Monitor.
   Serial.println(F("Arduino 3 services: 0x09"));
 }
 

@@ -39,6 +39,15 @@ uint8_t selectedHvac = 0;
 uint8_t selectedLight = 0; // Persistent LED state; starts off and survives loop().
 uint8_t selectedBlind = BLIND_OPEN_ANGLE;
 
+bool sensingAvailable = false;
+bool servicesAvailable = false;
+
+// Monitor existing communication results without extra traffic or output.
+// This checks board communication, not physical component connections.
+void monitorSystemComponents() {
+  sensingAvailable = sensorLinkOk && samplingLinkOk;
+  servicesAvailable = serviceLinkOk;
+}
 uint8_t chooseHvac(bool active, bool validTemperature, uint16_t centiC) {
   if (!active) return 0;             // SLEEP: LEDs off.
   if (!validTemperature) return 1;   // Wait for a fresh sample; LEDs off.
@@ -122,7 +131,7 @@ void refreshLcd() {
     snprintf(line, sizeof(line), "T:--.--C N:%03u", unsigned(sensorPeople));
   }
   printLcdRow(0, line);
-  // Show faults immediately; detailed readings remain in Serial Monitor.
+  // Show communication faults; detailed readings remain in Serial Monitor.
   if (!sensorLinkOk) printLcdRow(1, "SENSOR I2C ERROR");
   else if (!samplingLinkOk) printLcdRow(1, "SENSOR CMD ERROR");
   else if (!serviceLinkOk) printLcdRow(1, "SERVICE I2C ERR");
@@ -144,6 +153,7 @@ void setup() {
   // Uno R3: use the current Arduino AVR Boards package (tested with 1.8.8).
   Wire.setWireTimeout(25000, true); // 25 ms timeout, reset the I2C hardware.
   lastControl = uint32_t(millis()) - CONTROL_INTERVAL_MS;
+  Serial.println();
   Serial.println(F("Arduino 2: sensing=0x08 services=0x09"));
 }
 
@@ -175,6 +185,7 @@ void loop() {
       selectedBlind = BLIND_OPEN_ANGLE;
     }
     serviceLinkOk = sendServiceCommands(selectedLight, selectedHvac, selectedBlind);
+    monitorSystemComponents();
   }
   if (uint32_t(now - lastDisplay) >= 250) {
     lastDisplay = now;
@@ -185,13 +196,14 @@ void loop() {
     Serial.print(F("People=")); Serial.print(sensorPeople);
     Serial.print(F(" PIR=")); Serial.print(sensorMotion);
     Serial.print(F(" LDR=")); Serial.print(sensorDaylight);
+    Serial.print(F(" Light=")); Serial.print(selectedLight ? F("ON") : F("OFF"));
     Serial.print(F(" Temp="));
     if (sensorLinkOk && sensorTempValid) Serial.print(sensorTemp / 100.0, 2);
     else Serial.print(F("--"));
     Serial.print(F(" HVAC=")); Serial.print(hvacName(selectedHvac));
     Serial.print(F(" Blind=")); Serial.print(selectedBlind == BLIND_CLOSED_ANGLE ? 1 : 0);
     Serial.print(F(" Angle=")); Serial.print(selectedBlind);
-    Serial.print(F(" Sensor/Service=")); Serial.print(sensorLinkOk);
-    Serial.print('/'); Serial.println(serviceLinkOk);
+    Serial.print(F(" Sensor/Service=")); Serial.print(sensingAvailable);
+    Serial.print('/'); Serial.println(servicesAvailable);
   }
 }

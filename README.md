@@ -246,6 +246,10 @@ Lengths, version and valid value ranges are checked. The messages do not have
 an application checksum. Successful I2C delivery does not verify that a physical
 LED, servo or HVAC device acted on the command.
 
+Arduino 2's monitorSystemComponents() summarizes valid sensing data and
+acknowledged sampling/service commands using the existing Sensor/Service field.
+It does not verify individual physical components.
+
 If sensor data cannot be read, Arduino 2 commands the service LEDs off, opens the blind, and asks
 Arduino 1 to stop temperature sampling. If Arduino 1 or 3 stops receiving valid
 commands for 2.5 seconds, Arduino 1 stops temperature sampling and Arduino 3

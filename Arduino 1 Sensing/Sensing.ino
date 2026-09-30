@@ -106,6 +106,7 @@ void setup() {
   Wire.begin(SENSOR_ADDRESS);
   Wire.onRequest(sendReadings);
   Wire.onReceive(receiveSamplingCommand);
+  Serial.println(); // Start each run on a fresh line in Serial Monitor.
   Serial.println(F("Arduino 1 sensing: 0x08; +D3 / -D4"));
 }
 
