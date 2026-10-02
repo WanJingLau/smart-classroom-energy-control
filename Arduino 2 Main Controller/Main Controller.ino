@@ -7,8 +7,8 @@ const uint8_t SENSOR_ADDRESS = 0x08;
 const uint8_t SERVICE_ADDRESS = 0x09;
 const uint8_t SENSOR_FRAME_SIZE = 8;
 const uint32_t CONTROL_INTERVAL_MS = 100;
-const uint16_t HEAT_AT_OR_BELOW = 1500; // 15.00 C, in hundredths of a degree.
-const uint16_t COOL_AT_OR_ABOVE = 2500; // 25.00 C.
+const uint16_t HEAT_AT_OR_BELOW = 2000; // 20.00 C, in hundredths of a degree.
+const uint16_t COOL_AT_OR_ABOVE = 2600; // 26.00 C.
 // Lower ADC means darker. Calibrate these thresholds using measured LDR values.
 constexpr uint16_t LIGHT_ON_THRESHOLD = 300;
 constexpr uint16_t LIGHT_OFF_THRESHOLD = 400;
