@@ -1,76 +1,80 @@
-[README.md](https://github.com/user-attachments/files/32687339/README.md)
-# Smart classroom — three Arduino Uno R3 boards
+# Smart Classroom — Three Arduino Uno R3 Boards
 
-This package implements the latest sensing/controller/services arrangement.
-Use all three sketches from this package together. They replace the earlier
-temperature-node/PIR-node arrangement and use a different message format.
+An I²C classroom demonstrator using a potentiometer to simulate temperature, an LDR for daylight, buttons to simulate people entering and leaving, and a PIR for motion monitoring. LEDs represent lighting, heating and cooling; a servo represents a blind.
 
-## Which sketch goes on which board?
+The potentiometer does not measure room temperature. LED states are requested operating modes, not evidence of actual heating, cooling or energy savings.
 
-| Board | Open this sketch | Role | I2C address |
+## 1. Board roles and sketch folders
+
+| Board | Recommended sketch path | Role | I²C role/address |
 |---|---|---|---|
-| Arduino 1 | `Arduino 1 Sensing/Sensing.ino` | PIR, temperature potentiometer, LDR and people-count buttons | `0x08` |
-| Arduino 2 | `Arduino 2 Main Controller/Main Controller.ino` | All decisions and the 1602 LCD | Main controller; `Wire.begin()` |
-| Arduino 3 | `Arduino 3 Services/services.ino` | Classroom-light LED, heating/cooling LEDs and blind servo | `0x09` |
+| Arduino 1 | `Arduino1_Sensing/Arduino1_Sensing.ino` | PIR, potentiometer, LDR and count buttons | Peripheral `0x08` |
+| Arduino 2 | `Arduino2_Controller/Arduino2_Controller.ino` | Control decisions and parallel 1602 LCD | Sole controller; `Wire.begin()` |
+| Arduino 3 | `Arduino3_Services/Arduino3_Services.ino` | Three LEDs and blind servo | Peripheral `0x09` |
 
-Each sketch is a **single `.ino` file**. No `NodeLogic.h`, `ControlLogic.h`
-or `PirLogic.h` is needed. The `tests` folder is only for optional computer-side
-checks; do not copy it into a sketch folder or upload it to an Arduino.
+Rename each sketch and its enclosing folder together if the package uses different names. These paths are the recommended layout, not a claim that the supplied sketches have already been renamed. Upload each sketch separately to its assigned board. Do not combine the three sketches.
 
-## Occupancy and control rules
+## 2. Final operating rules
 
-The room is occupied when the people count is above zero OR PIR is HIGH.
-A positive count keeps lighting, HVAC and blind control active even when PIR
-is LOW. It becomes unoccupied only when the count is zero AND PIR is LOW,
-on the next controller poll (every 100 ms), with no software departure delay.
-When unoccupied, all LEDs turn off, temperature sampling stops, and the blind
-opens. The count buttons update N (0-999); O/U shows this combined occupancy
-condition. The PIR module may hold HIGH for its own configured duration.
+### Occupancy and five-second HVAC shutdown
 
-| Condition | Output |
+- The + button increases the people count; the − button decreases it. The allowed range is 0–999.
+- A count above zero means occupied. A count of zero means unoccupied.
+- PIR reports motion separately; it does not change the count or independently wake the services in this configuration.
+- On startup with zero people, HVAC is in SLEEP, the classroom LED is off, and the blind is open.
+- When the count changes from positive to zero, the classroom LED switches off and the blind opens. HVAC remains active for five seconds, continuing to follow the temperature rule, then enters SLEEP with both HVAC LEDs off.
+- Adding a person during the five-second countdown cancels shutdown.
+- Potentiometer and LDR sampling continue during the countdown and stop when HVAC enters SLEEP. PIR, buttons, I²C communication and the main loops continue running. All boards remain powered; this is software sampling suspension, not hardware power-down.
+
+### Temperature and HVAC
+
+Temperature uses the averaged potentiometer ADC count:
+
+`temperatureCentiC = (ADC × 4000 + 511) / 1023`
+
+The calculation uses unsigned integer arithmetic with a 32-bit intermediate. Divide the result by 100 for °C. This corresponds to rounding the simulated temperature to the nearest hundredth of a degree; it is not a statement of physical measurement accuracy.
+
+| Condition while HVAC is active | Mode | Red LED | Green LED |
+|---|---|---|---|
+| Temperature <20.00 °C | HEAT | On | Off |
+| 20.00–26.00 °C inclusive | IDLE | Off | Off |
+| Temperature >26.00 °C | COOL | Off | On |
+| Temperature unavailable | IDLE/waiting | Off | Off |
+| HVAC asleep | SLEEP | Off | Off |
+
+Arduino 2 must use strict comparisons `<2000` and `>2600`, and `HVAC_SLEEP_DELAY_MS = 5000`. An earlier sketch using `<=2000` and `>=2600` does not implement this table.
+
+| ADC count | Calculated temperature | Expected active mode |
+|---:|---:|---|
+| 0 | 0.00 °C | HEAT |
+| 511 | 19.98 °C | HEAT |
+| 512 | 20.02 °C | IDLE |
+| 665 | 26.00 °C | IDLE |
+| 666 | 26.04 °C | COOL |
+| 1023 | 40.00 °C | COOL |
+
+These rows are calculated checks; they are not six claimed hardware observations. Fixed HVAC thresholds do not implement state-dependent hysteresis or a minimum equipment run time. The five-second departure delay is separate from threshold switching.
+
+### Lighting and blind
+
+Lower LDR counts mean darker conditions with the divider described below.
+
+| Condition | Command |
 |---|---|
-| Occupied, temperature <=20 C | Heating on |
-| Occupied, temperature >=26 C | Cooling on |
-| Occupied, temperature strictly between 20 and 26 C | HVAC indicators off |
-| Unoccupied or temperature unavailable | HVAC indicators off |
-| Occupied, LDR <=300 | Classroom LED on |
-| Occupied, LDR >=400 | Classroom LED off |
-| Occupied, LDR 301-399 | Keep previous classroom LED state |
-| Unoccupied | Classroom LED off and blind open (0 degrees) |
-| Occupied and LDR >500 | Blind closed (90 degrees) |
-| Otherwise | Blind open |
+| Occupied and LDR ≤300 | Classroom LED on |
+| Occupied and LDR ≥400 | Classroom LED off |
+| Occupied and LDR 301–399 | Retain previous classroom LED state |
+| Occupied and LDR >500 | Blind closed, 90° |
+| Occupied and LDR ≤500 | Blind open, 0° |
+| Unoccupied | Classroom LED off; blind open |
 
-These use the final 20/26 C HVAC rules, rather than the alternative thresholds.
-Temperature is simulated with a potentiometer. LDR thresholds are raw ADC counts
-and need calibration. Sleep stops temperature sampling only; all boards remain
-powered and PIR, buttons and daylight continue to be read.
+Lighting starts off and resets to off when unoccupied or on a sensor communication fault. For example, while occupied: 650 → off, 380 → off, 300 → on, 350 → on, 400 → off. Entering occupancy at 380 after a reset leaves the LED off.
 
-## Lighting hysteresis and calibration
+Calibrate 300/400 and 500 for the actual circuit and lighting. LDR counts are not lux. Blind control is independent of temperature and lighting hysteresis. At occupied LDR 400 and 28 °C, the classroom LED is off, the blind is open, and HVAC is COOL.
 
-Arduino 2 stores the LED state in the global `selectedLight` variable, initially
-zero (off). Each control cycle updates it with `chooseLight()` before sending
-it to Arduino 3 and displaying the status. At or below `LIGHT_ON_THRESHOLD`
-(300), the occupied-room LED turns on. At or above `LIGHT_OFF_THRESHOLD` (400),
-it turns off. Between these thresholds it retains its previous state.
-Unoccupied status or a sensor communication fault resets the state to off.
-Occupancy uses people count >0 OR PIR HIGH, without an added software delay.
+## 3. Shared I²C wiring and power
 
-For example, while occupied: 650 -> off, 380 -> off, 300 -> on, 350 -> on,
-399 -> on, 400 -> off. Re-entering occupancy at 380 after the room was
-unoccupied leaves the LED off until the reading reaches 300 or below.
-
-Record about ten readings each with the LDR uncovered, partially covered and
-fully covered, using Serial Monitor at 9600 baud. Choose separated ON/OFF
-thresholds from those measurements; 300/400 are starting values, not calibrated
-results. The current wiring makes lower ADC readings darker. Slowly cover and
-uncover the LDR and record the actual switching readings for the Results section.
-Test both directions through 301-399 to confirm state retention, and check
-that the LED turns off when the count is zero and PIR is LOW, regardless of daylight.
-The blind closes only when occupied and LDR >500 ADC; at 500 it stays open.
-
-## Shared I2C wiring
-
-For **5 V Arduino Uno R3 / ATmega328P boards**:
+For 5 V Arduino Uno R3 / ATmega328P boards:
 
 | Signal | Arduino 1 | Arduino 2 | Arduino 3 |
 |---|---|---|---|
@@ -78,221 +82,174 @@ For **5 V Arduino Uno R3 / ATmega328P boards**:
 | SCL | A5 | A5 | A5 |
 | Common ground | GND | GND | GND |
 
-All A4 pins connect together. All A5 pins connect together. All grounds connect
-together. Arduino 2 initiates every I2C transaction.
+Connect all SDA pins together, all SCL pins together, and all grounds together. Arduino 2 initiates every transaction. Use short wires and a 100 kHz bus.
 
-Use one pair of external pull-ups for this bare-board bus: SDA through 4.7 kohm
-to Arduino 2's 5 V, and SCL through 4.7 kohm to the same 5 V. Keep breadboard wires
-short and power all boards during operation. If using separate USB power for
-the boards, leave their 5 V pins unconnected to one another. Only the grounds
-and I2C signals are shared between the boards.
+For a bare-board bus without suitable existing pull-ups, use one external pair: SDA through 4.7 kΩ to Arduino 2 5 V, and SCL through 4.7 kΩ to the same supply. Account for any pull-ups already fitted to connected modules.
 
-## Arduino 1: all sensing inputs
+Power all three boards during operation. With separate USB supplies, leave the boards’ 5 V pins unconnected to each other; share ground and I²C signals. Do not leave a board unpowered while other boards drive the shared bus. A USB connection is also used to upload a sketch and view that board’s Serial Monitor.
 
-| Component connection | Arduino 1 connection |
+## 4. Arduino 1 — sensing wiring
+
+| Component | Connection |
 |---|---|
-| Typical 5 V PIR module VCC | 5 V |
-| PIR module GND | GND |
+| Compatible 5 V PIR VCC | Arduino 1 5 V |
+| PIR GND | Arduino 1 GND |
 | PIR OUT | D2 |
-| `+1` button | Between D3 and GND |
-| `−1` button | Between D4 and GND |
-| Temperature potentiometer middle terminal | A0 |
+| + button | Between D3 and GND |
+| − button | Between D4 and GND |
+| Temperature potentiometer wiper | A0 |
 | Temperature potentiometer outer terminals | 5 V and GND |
 | LDR first leg | 5 V |
 | LDR second leg | A1 |
-| 10 kohm fixed resistor | Between the same A1 junction and GND |
+| 10 kΩ fixed resistor | A1 junction to GND |
 
-Read the PIR's printed pin labels; physical pin order varies. The sketch assumes
-a module whose OUT becomes HIGH on motion. Arduino 1 now reads that pin
-immediately after startup, and Arduino 2 reports changes within its 100 ms I2C
-poll interval. The module itself may still need around 30–60 seconds after
-power-up to stabilise, during which motion readings may be unreliable.
+Use approximately a 10 kΩ potentiometer. The LDR has no polarity. Buttons use `INPUT_PULLUP`: unpressed is HIGH, pressed is LOW. Debounce is 35 ms; holding a button should not repeatedly change the count. A four-leg tactile switch must use contacts that connect only when pressed.
 
-If your **HC-SR501** stays HIGH for about 20 seconds after motion, turn its
-**TIME/delay** trimmer counterclockwise in small steps toward its minimum; this
-shortens the module's output pulse, typically to around 5 seconds on that
-variant. Set its jumper to **L** to make the pulse end after the selected time;
-**H** can extend HIGH while more motion retriggers the sensor. Adjust the
-**sensitivity/range** trimmer separately if movement at your demonstration
-distance is not picked up. These are module settings: software can report a
-HIGH immediately but cannot detect a new rising edge while the module's OUT
-pin remains HIGH. Other PIR module models may use different controls.
+Follow the PIR’s printed pin labels; physical order varies. Its output is assumed active HIGH. Allow its startup stabilisation period before evaluating motion. A PIR can hold HIGH after movement stops; repeated HIGH print lines are repeated samples of one pulse, not necessarily separate detections. Adjust its TIME control and H/L trigger mode according to the module documentation. Software cannot infer additional rising edges while OUT remains HIGH.
 
-The buttons use `INPUT_PULLUP`, so an unpressed input is HIGH and a pressed input
-is LOW. No external button resistors are needed. For a four-leg tactile button,
-use a pair of contacts that connect only when pressed, not two permanently
-connected legs.
+Active analogue sampling occurs approximately every 50 ms. The sketch discards the first ADC read after changing channels and averages four readings. On sleep, the previous stored readings may remain visible unless Serial output explicitly replaces them with `--` or `SLEEP`; stale stored values are not fresh samples. In this configuration, the sampling command gates both potentiometer and LDR acquisition.
 
-Use approximately a 10 kohm potentiometer for temperature. It provides an input
-voltage, which the code maps from ADC 0–1023 to simulated 0–40 C. It does not
-measure actual room temperature. With the LDR divider connected as above,
-brighter light produces a larger reading; covering the LDR produces a smaller
-reading. The LDR's legs have no polarity.
+## 5. Arduino 2 — parallel 1602 LCD
 
-## Arduino 2: parallel 1602 LCD
+For a 16-pin HD44780-compatible LCD without an I²C backpack:
 
-This wiring is for the **16-pin HD44780-compatible LCD without an I2C backpack**.
-LCD pin names D4–D7 are display data pins; the table distinguishes them from
-Arduino digital pins.
-
-| LCD physical pin | LCD label | Connection |
+| Physical pin | LCD label | Connection |
 |---:|---|---|
-| 1 | VSS | Arduino 2 GND |
-| 2 | VDD / VCC | Arduino 2 5 V |
-| 3 | VO | Middle terminal of a separate 10 kohm contrast potentiometer |
+| 1 | VSS | GND |
+| 2 | VDD | 5 V |
+| 3 | VO | Wiper of a separate 10 kΩ contrast potentiometer |
 | 4 | RS | Arduino 2 D12 |
-| 5 | R/W | Arduino 2 GND |
-| 6 | E / Enable | Arduino 2 D11 |
-| 7–10 | D0–D3 | Leave unconnected; this sketch uses 4-bit mode |
+| 5 | R/W | GND |
+| 6 | E | Arduino 2 D11 |
+| 7–10 | D0–D3 | Unconnected, 4-bit mode |
 | 11 | D4 | Arduino 2 D5 |
 | 12 | D5 | Arduino 2 D4 |
 | 13 | D6 | Arduino 2 D3 |
 | 14 | D7 | Arduino 2 D2 |
-| 15 | A / LED+ | Arduino 2 5 V through 220 ohm for a typical bare backlight; check module rating |
-| 16 | K / LED− | Arduino 2 GND |
+| 15 | A / LED+ | 5 V through a suitable backlight resistor; check the module rating |
+| 16 | K / LED− | GND |
 
-Connect the contrast potentiometer's two outer terminals to Arduino 2 5 V and
-GND. This is separate from the temperature potentiometer on Arduino 1.
-Turn the contrast control slowly if the backlight is on but no characters are
-visible. If your existing LCD already works with VO connected to GND, that can
-remain for this prototype; an adjustable contrast control is more flexible.
+Connect the contrast potentiometer’s outer terminals to Arduino 2 5 V and GND. It is separate from Arduino 1’s temperature potentiometer. The constructor is:
 
-The constructor is `LiquidCrystal lcd(12, 11, 5, 4, 3, 2);`.
-Using D2–D5 here does not conflict with inputs on Arduino 1: each board has its
-own pins. A4 and A5 remain available for I2C.
+```cpp
+LiquidCrystal lcd(12, 11, 5, 4, 3, 2);
+```
 
-The LCD uses one fixed page, refreshed every 250 ms:
+Digital pin numbers on different boards do not conflict. A4/A5 are reserved for I²C on each Uno.
+
+The LCD refreshes approximately every 250 ms. Example:
 
 ```text
 T:28.00C N:002
 O COOL L0 B0
 ```
 
-T is temperature; N is people count. O/U means occupied/unoccupied using the
-combined count/PIR rule. HEAT, COOL, IDLE or SLEEP shows HVAC status. L1/L0
-means classroom LED on/off; B1/B0 means blind closed/open (90/0 degrees).
-Temperature shows --.--C when unavailable. Communication faults replace row 2
-with SENSOR I2C ERROR, SENSOR CMD ERROR or SERVICE I2C ERR. During a sensor
-fault, N is the last received count.
+- T: simulated temperature; N: people count.
+- O/U: occupied/unoccupied according to the count.
+- HEAT/COOL/IDLE/SLEEP: HVAC command.
+- L1/L0: classroom LED on/off.
+- B1/B0: blind closed/open.
 
-PIR, raw LDR, blind angle, and link diagnostics remain in Arduino 2's
-Serial Monitor at 9600 baud. Arduino 3's local servo-change and command-timeout
-messages remain in that board's Serial Monitor. Output states are commands,
-not physical feedback.
+During the five-second departure countdown, U can appear together with HEAT, COOL or IDLE: the room is unoccupied but HVAC shutdown is pending. Temperature displays `--.--C` when unavailable. Row 2 can show `SENSOR I2C ERROR`, `SENSOR CMD ERROR` or `SERVICE I2C ERR`. On a sensor fault, the displayed count can be the last successfully received count.
 
-## Arduino 3: output components
+Use the Serial Monitor at 9600 baud for PIR, LDR, commanded angle and communication status when those fields are included in the uploaded sketch. Displayed output states are commands, not physical feedback.
+
+## 6. Arduino 3 — outputs
 
 | Component | Connection |
 |---|---|
-| Classroom-light LED | D10 through 220–330 ohm to LED anode; cathode to GND |
-| Green cooling LED | D9 through 220–330 ohm to LED anode; cathode to GND |
-| Red heating LED | D8 through 220–330 ohm to LED anode; cathode to GND |
+| Classroom LED | D10 through its own 220–330 Ω resistor to anode; cathode to GND |
+| Green cooling LED | D9 through its own 220–330 Ω resistor to anode; cathode to GND |
+| Red heating LED | D8 through its own 220–330 Ω resistor to anode; cathode to GND |
 | Servo signal | D6 |
-| Servo positive power | Suitable regulated servo supply, typically 5 V for a small hobby servo |
-| Servo ground | Supply ground and Arduino 3 GND |
+| Servo positive supply | Regulated supply suitable for its voltage and stall current |
+| Servo ground | Supply ground and Arduino 3/common GND |
 
-Use a separate resistor for each LED. The LEDs are switched with `digitalWrite`,
-so the Servo library's use of a timer does not require PWM on D9 or D10.
-Power the servo from a supply rated for its current, including stall current;
-check its voltage rating. Keep the servo supply ground connected to the common
-Arduino ground. With Arduino 3 powered by USB, do not connect the separate
-servo supply positive to the Arduino 5 V pin.
+With Arduino 3 on USB, do not connect a separate servo supply’s positive terminal to the Arduino 5 V pin. Share ground. LEDs use `digitalWrite`; they do not require PWM operation on D9/D10.
 
-Set `BLIND_OPEN_ANGLE` and `BLIND_CLOSED_ANGLE` on Arduino 2 for your mechanism.
-Also match Arduino 3's `START_ANGLE` to the chosen open angle. Establish the
-usable travel before attaching the blind linkage. The initial defaults are
-0 degrees open and 90 degrees closed.
+The documented blind positions are 0° open and 90° closed. Match Arduino 2’s angle constants and Arduino 3’s `START_ANGLE` to the actual mechanism. Set `START_ANGLE = 0` for these defaults; earlier versions used 20°. Check usable servo travel before attaching the linkage.
 
-## Upload and demonstrate
+## 7. Upload and demonstration
 
-1. Extract the whole ZIP to a normal folder first.
-2. In Arduino IDE, select **Arduino Uno** and the correct port for each board.
-   Use a current **Arduino AVR Boards** package (this version was compiled with
-   1.8.8); the controller calls the AVR Wire timeout API directly.
-3. Open the `.ino` inside its matching sketch folder. Upload Arduino 1 and
-   Arduino 3, then upload Arduino 2. Keep the folder names matching the `.ino`
-   names. Do not combine the three sketches into one Arduino IDE project.
-4. `Wire` comes with Arduino AVR Boards. If needed, install **LiquidCrystal by
-   Arduino** and **Servo by Arduino** through Library Manager. These are the
-   standard libraries; custom header files are not required.
-5. Connect and power the circuit. Open a board's Serial Monitor at **9600 baud**.
-6. With zero people and no motion, verify that all LEDs are off and the blind is open.
-7. Trigger PIR motion or add a person to wake temperature sampling.
-8. Test temperature <20 C, between 20 and 26 C, and >26 C for HVAC states.
-9. Test LDR <=300, at 301-399, and >=400 for lighting hysteresis.
-10. While occupied, verify the blind opens at LDR <=500 and closes at LDR >500.
-11. With the count at zero and PIR LOW, verify on the next cycle that all LEDs turn
-    off, temperature sampling stops and the blind opens.
-12. Set N above zero and let PIR go LOW: all controls must remain active,
-    following their temperature and daylight rules. Remove the last person
-    while PIR is LOW to verify immediate unoccupied behavior.
+1. Extract the package and ensure each sketch folder matches its `.ino` filename.
+2. Select Arduino Uno and the correct port for each board in Arduino IDE.
+3. Install the Arduino AVR Boards package and the standard LiquidCrystal and Servo libraries if needed. Wire comes with the board package. The controller requires a Wire version supporting `setWireTimeout()`; update the board package if that API is unavailable.
+4. Confirm the uploaded sketches implement the rules in Section 2, including strict HVAC boundaries, count-based occupancy, a 5000 ms delay and gating both analogue inputs.
+5. Upload Arduino 1 and Arduino 3, then Arduino 2. Power all boards and open the relevant Serial Monitor at 9600 baud.
+6. At startup with N=0, verify SLEEP, all LEDs off, and blind open. PIR alone must not enable services.
+7. Press + once. Verify active sensing and occupancy, including when PIR is LOW.
+8. Test temperatures below 20 °C, inside 20–26 °C, and above 26 °C. Verify IDLE at 26.00 °C and use actual ADC values for boundary checks. An integer ADC count may not map to exactly 20.00 °C; distinguish display rounding from the centidegree value used for decisions.
+9. Test LDR ≤300, 301–399 and ≥400 in both directions. Verify retained lighting state in the intermediate band.
+10. While occupied, verify the blind opens at LDR ≤500 and closes at >500.
+11. Reduce N from 1 to 0 while HEAT or COOL is active. Verify immediate classroom-light off/blind open, then HVAC SLEEP after approximately five seconds. Both analogue channels should then stop updating.
+12. Repeat departure and press + before five seconds expire. Verify shutdown is cancelled.
+13. Reset with N=0 and verify there is no startup departure countdown.
 
-## Communication and fault behavior
+The five-second setting is a software target. Measure elapsed time if reporting shutdown timing accuracy; controller polling and output updates affect the observed timing.
 
-Arduino 2 polls Arduino 1 every 100 ms. It reads an eight-byte sensor packet,
-sends Arduino 1 a one-byte sampling command, then sends Arduino 3 a four-byte
-output command. Arduino 1 samples approximately every 50 ms when enabled.
+## 8. Communication and fault behaviour
 
-| Packet | Contents |
+Arduino 2 runs a control cycle approximately every 100 ms. It reads Arduino 1, sends a sampling command, then sends Arduino 3 an output command.
+
+| Message | Format |
 |---|---|
-| Arduino 1 reply, 8 bytes | Version 1; flags; count high/low; temperature high/low; LDR high/low |
-| Flags | Bit 0: PIR movement; bit 1: valid active temperature sample |
-| Temperature | Unsigned hundredths of a degree, 0–4000; `0xFFFF` when unavailable |
-| Command to Arduino 1, 1 byte | 0 = stop temperature sampling; 1 = enable it |
-| Command to Arduino 3, 4 bytes | Version 1; classroom light 0/1; HVAC 0/1/2/3; servo angle 0–180 |
-| HVAC codes | 0 sleep; 1 idle/waiting; 2 heating; 3 cooling |
+| Sensor reply, 8 bytes | Version 1; flags; count high/low; temperature high/low; LDR high/low |
+| Flags | Bit 0: PIR HIGH; bit 1: valid active temperature sample |
+| Temperature | Unsigned centidegrees, 0–4000; `0xFFFF` when unavailable |
+| Sampling command, 1 byte | 0: suspend both analogue channels; 1: enable both |
+| Service command, 4 bytes | Version 1; classroom LED 0/1; HVAC code; angle 0–180 |
+| HVAC code | 0 SLEEP; 1 IDLE/waiting; 2 HEAT; 3 COOL |
 
-Lengths, version and valid value ranges are checked. The messages do not have
-an application checksum. Successful I2C delivery does not verify that a physical
-LED, servo or HVAC device acted on the command.
+The packet layout is unchanged when the sampling command gates both analogue channels. There is no separate LDR-valid flag; ignore the retained LDR value when sampling is suspended. A newly enabled cycle can initially contain a previous LDR value until the next acquisition. Temperature validity indicates whether an active temperature sample is available.
 
-Arduino 2's monitorSystemComponents() summarizes valid sensing data and
-acknowledged sampling/service commands using the existing Sensor/Service field.
-It does not verify individual physical components.
+Lengths, version and permitted values are checked. There is no application-level checksum. I²C acknowledgements and `monitorSystemComponents()` status do not verify physical LED or servo operation.
 
-If sensor data cannot be read, Arduino 2 commands the service LEDs off, opens the blind, and asks
-Arduino 1 to stop temperature sampling. If Arduino 1 or 3 stops receiving valid
-commands for 2.5 seconds, Arduino 1 stops temperature sampling and Arduino 3
-turns all LEDs off, respectively. The servo holds its previous commanded angle.
-Arduino 2 explicitly enables a 25 ms AVR Wire timeout so a stalled transaction
-can return an error. Sensor communication failure also clears occupancy: on recovery, a positive count or PIR motion wakes the system; otherwise it stays asleep.
+On sensor communication failure, Arduino 2 commands LEDs off, opens the blind, disables sampling and cancels the departure countdown. Communication faults bypass the normal five-second delay. On recovery, a positive people count enables operation; PIR alone does not.
 
-To demonstrate a lost-controller timeout, leave all boards powered and hold
-Arduino 2's RESET button for more than 2.5 seconds. Observe Arduino 1's Serial
-output change to SLEEP and Arduino 3's LEDs turn off. Releasing RESET allows
-control to resume from Arduino 1's current count and PIR reading.
+After 2.5 seconds without valid commands, Arduino 1 disables both analogue channels and Arduino 3 turns all LEDs off. Arduino 3 holds its last commanded servo position on this timeout. This differs from a functioning Arduino 2 explicitly commanding the blind open after a sensor fault.
 
-## Verification
+Arduino 2 uses `Wire.setWireTimeout(25000, true)` for a 25 ms transaction timeout. This bounds individual stalled transactions; it does not guarantee a fixed end-to-end response time under faults.
 
-The updated rules require Arduino compilation and physical circuit verification.
-No hardware test results are claimed here.
+To check lost-controller behaviour, keep the boards powered and hold Arduino 2 RESET for more than 2.5 seconds. Verify sampling suspension and LEDs off; release RESET and verify recovery according to the current count.
 
-## Official references
+## 9. Troubleshooting
+
+### PIR remains HIGH
+
+Check the module’s output delay, trigger mode, stable power and surroundings. Place it still, facing away from nearby people. With PIR OUT disconnected, connecting Arduino 1 D2 to GND should give PIR=0. Do not ground the connected sensor output. An unconnected INPUT can float, so an unplugged D2 reading is not a reliable sensor test.
+
+### Temperature or daylight appears unchanged
+
+Check whether sampling is asleep. Press + to set N above zero, verify communication and wait for a fresh sample. Check the potentiometer wiper on A0 and the LDR divider junction on A1. Different reachable ADC endpoints alone do not identify an electrical cause.
+
+### Servo does not move
+
+Set N above zero and cross LDR 500 in both directions. Arduino 2 should command 0° at ≤500 and 90° at >500. Check service communication, the D6 signal, servo power and common ground. Compare Arduino 3’s reported command if available. Correct reported angles do not confirm mechanical motion. Do not assume that a particular diagnostic message exists unless present in the uploaded sketch.
+
+## 10. Reported observations and verification scope
+
+The following are user-reported prototype observations from the project record, not tests independently repeated when preparing this README:
+
+| Check | Reported observation |
+|---|---|
+| PotRaw, only Arduino 1 on USB | 0–1018 |
+| PotRaw, only Arduino 2 on USB | 0–1022 |
+| PotRaw, both Arduino 1 and Arduino 2 on USB | 0–1023 |
+| Valid temperature samples | 5/5 valid |
+| LCD comparison | Five readings matched the calculated value to displayed precision |
+| HVAC decisions | 10/10 correct |
+| Boundary holds | Two holds reported IDLE at 20 °C and 26 °C, with no unexpected changes |
+| Heating and cooling LEDs together | 0 occurrences in five checks |
+| I²C/missing-sample events | 0 events in five checks |
+
+The reported 20 °C hold should be documented with the underlying centidegree/ADC value if an exact boundary claim is required; an integer ADC input does not map to exactly 20.00 °C with this conversion. The USB-range observations do not establish their cause, and USB connection descriptions alone do not specify how every board was powered.
+
+The five-second shutdown is the selected final behaviour. No measured timing error or trial count is supplied for it. Earlier observations do not establish that every later firmware revision was retested. The final three sketches were not supplied with the README review, so their compilation and implementation of these rules still require verification. Keep the report, README and uploaded code consistent before demonstration or submission.
+
+## 11. Official documentation
 
 - [Arduino Uno R3 pinout](https://docs.arduino.cc/resources/pinouts/A000066-full-pinout.pdf)
-- [Arduino LiquidCrystal HelloWorld wiring and constructor](https://github.com/arduino-libraries/LiquidCrystal/blob/master/examples/HelloWorld/HelloWorld.ino)
+- [LiquidCrystal HelloWorld example](https://github.com/arduino-libraries/LiquidCrystal/blob/master/examples/HelloWorld/HelloWorld.ino)
 - [Arduino AVR Wire API](https://github.com/arduino/ArduinoCore-avr/blob/master/libraries/Wire/src/Wire.h)
-- [Arduino servo motor guidance](https://docs.arduino.cc/learn/electronics/servo-motors/)
-- [SunFounder HC-SR501 controls and trigger modes](https://docs.sunfounder.com/projects/umsk/en/latest/01_components_basic/12-component_pir_motion.html)
-
-## Checking a stationary blind servo
-
-Lighting hysteresis (300/400 ADC) is independent of blind control (LDR >500
-while occupied). Temperature does not control the blind. At occupied LDR 400 and temperature 28 C, for example,
-the LED is off but the blind stays open at 0 degrees.
-
-Upload the current controller and services sketches to Arduino 2 and Arduino 3.
-At 9600 baud, Arduino 2 reports Blind, Angle and Sensor/Service.
-Arduino 3 reports Blind and Angle and prints Servo command D6 whenever the target changes.
-Blind is the indicator (0=open, 1=closed); Angle is the commanded servo angle,
-not a measured position.
-
-For a controlled check, set people count above zero. At LDR <=500, expect
-Blind=0 Angle=0. Raise LDR above 500: expect Blind=1 Angle=90. Lower it to 500 or below:
-expect Blind=0 Angle=0. With zero people and PIR LOW, expect Blind=0 Angle=0 regardless
-of daylight. Compare both boards.
-If Arduino 2 changes but Arduino 3 does not, check for SERVICE I2C ERR or
-COMMAND TIMEOUT and verify the uploaded sketches and I2C connections.
-If both report the expected angles but there is no movement, inspect the servo
-signal connection to Arduino 3 D6, its supply and common ground using the wiring
-section above. Software does not confirm physical movement.
+- [Arduino servo guidance](https://docs.arduino.cc/learn/electronics/servo-motors/)
+- [SunFounder HC-SR501 controls](https://docs.sunfounder.com/projects/umsk/en/latest/01_components_basic/12-component_pir_motion.html)
