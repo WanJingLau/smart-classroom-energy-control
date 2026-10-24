@@ -7,8 +7,8 @@ const uint8_t SENSOR_ADDRESS = 0x08;
 const uint8_t SERVICE_ADDRESS = 0x09;
 const uint8_t SENSOR_FRAME_SIZE = 8;
 const uint32_t CONTROL_INTERVAL_MS = 100;
-const uint16_t HEAT_AT_OR_BELOW = 1500; // 15.00 C, in hundredths of a degree.
-const uint16_t COOL_AT_OR_ABOVE = 2500; // 25.00 C.
+const uint16_t HEAT_AT_OR_BELOW = 2000; // 20.00 C, in hundredths of a degree.
+const uint16_t COOL_AT_OR_ABOVE = 2600; // 26.00 C.
 // Lower ADC means darker. Calibrate these thresholds using measured LDR values.
 constexpr uint16_t LIGHT_ON_THRESHOLD = 300;
 constexpr uint16_t LIGHT_OFF_THRESHOLD = 400;
@@ -17,10 +17,14 @@ static_assert(LIGHT_ON_THRESHOLD < LIGHT_OFF_THRESHOLD,
 const uint16_t HIGH_DAYLIGHT_THRESHOLD = 500;
 const uint8_t BLIND_OPEN_ANGLE = 0;   // Calibrate for the model's linkage.
 const uint8_t BLIND_CLOSED_ANGLE = 90;
+const uint32_t HVAC_SLEEP_DELAY_MS = 5000;
 
 // LCD RS, E, D4, D5, D6, D7. LCD R/W goes to GND.
 LiquidCrystal lcd(12, 11, 5, 4, 3, 2);
 
+uint16_t previousPeopleCount = 0;
+bool waitingToSleep = false;
+uint32_t emptySince = 0;
 uint16_t sensorPeople = 0;
 uint16_t sensorTemp = 0;
 uint16_t sensorDaylight = 0;
@@ -166,15 +170,39 @@ void loop() {
       if (sensorMotion != lastReportedMotion) {
         lastReportedMotion = sensorMotion;
       }
-      // A positive count keeps the room active even without PIR motion.
-      roomOccupied = (sensorPeople > 0) || sensorMotion;
-      hvacActive = roomOccupied;
-      const bool occupied = roomOccupied;
-      samplingLinkOk = sendSamplingCommand(hvacActive);
-      selectedHvac = chooseHvac(hvacActive, sensorTempValid && samplingLinkOk, sensorTemp);
-      selectedLight = chooseLight(occupied, sensorDaylight) ? 1 : 0;
-      // Close only when occupied and daylight is strictly above 500 ADC.
-      selectedBlind = chooseBlind(occupied, sensorDaylight);
+      // Buttons determine occupancy; PIR is monitored separately.
+roomOccupied = sensorPeople > 0;
+
+if (roomOccupied) {
+  // Someone was added: cancel the sleep countdown.
+  waitingToSleep = false;
+} else if (previousPeopleCount > 0) {
+  // Count just changed from positive to zero.
+  emptySince = now;
+  waitingToSleep = true;
+}
+
+previousPeopleCount = sensorPeople;
+
+// Finish the countdown after 10 seconds.
+if (waitingToSleep &&
+    uint32_t(now - emptySince) >= HVAC_SLEEP_DELAY_MS) {
+  waitingToSleep = false;
+}
+
+// HVAC and temperature sampling remain active during the countdown.
+hvacActive = roomOccupied || waitingToSleep;
+
+samplingLinkOk = sendSamplingCommand(hvacActive);
+selectedHvac = chooseHvac(
+    hvacActive,
+    sensorTempValid && samplingLinkOk,
+    sensorTemp
+);
+
+// Lighting and blinds respond immediately to the people count.
+selectedLight = chooseLight(roomOccupied, sensorDaylight) ? 1 : 0;
+selectedBlind = chooseBlind(roomOccupied, sensorDaylight);
     } else {
       // A sensor fault clears occupancy; valid count or motion can wake it again.
       roomOccupied = false;
