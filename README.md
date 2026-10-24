@@ -29,9 +29,9 @@ condition. The PIR module may hold HIGH for its own configured duration.
 
 | Condition | Output |
 |---|---|
-| Occupied, temperature <=15 C | Heating on |
-| Occupied, temperature >=25 C | Cooling on |
-| Occupied, temperature strictly between 15 and 25 C | HVAC indicators off |
+| Occupied, temperature <=20 C | Heating on |
+| Occupied, temperature >=26 C | Cooling on |
+| Occupied, temperature strictly between 20 and 26 C | HVAC indicators off |
 | Unoccupied or temperature unavailable | HVAC indicators off |
 | Occupied, LDR <=300 | Classroom LED on |
 | Occupied, LDR >=400 | Classroom LED off |
@@ -40,7 +40,7 @@ condition. The PIR module may hold HIGH for its own configured duration.
 | Occupied and LDR >500 | Blind closed (90 degrees) |
 | Otherwise | Blind open |
 
-These use the final 15/25 C HVAC rules, rather than the alternative thresholds.
+These use the final 20/26 C HVAC rules, rather than the alternative thresholds.
 Temperature is simulated with a potentiometer. LDR thresholds are raw ADC counts
 and need calibration. Sleep stops temperature sampling only; all boards remain
 powered and PIR, buttons and daylight continue to be read.
@@ -218,7 +218,7 @@ usable travel before attaching the blind linkage. The initial defaults are
 5. Connect and power the circuit. Open a board's Serial Monitor at **9600 baud**.
 6. With zero people and no motion, verify that all LEDs are off and the blind is open.
 7. Trigger PIR motion or add a person to wake temperature sampling.
-8. Test temperature <=15 C, between 15 and 25 C, and >=25 C for HVAC states.
+8. Test temperature <20 C, between 20 and 26 C, and >26 C for HVAC states.
 9. Test LDR <=300, at 301-399, and >=400 for lighting hysteresis.
 10. While occupied, verify the blind opens at LDR <=500 and closes at LDR >500.
 11. With the count at zero and PIR LOW, verify on the next cycle that all LEDs turn
