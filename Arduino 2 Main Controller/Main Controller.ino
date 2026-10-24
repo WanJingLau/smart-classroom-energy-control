@@ -7,12 +7,15 @@ const uint8_t SENSOR_ADDRESS = 0x08;
 const uint8_t SERVICE_ADDRESS = 0x09;
 const uint8_t SENSOR_FRAME_SIZE = 8;
 const uint32_t CONTROL_INTERVAL_MS = 100;
-const uint32_t EMPTY_ROOM_DELAY_MS = 10000;
 const uint16_t HEAT_AT_OR_BELOW = 1500; // 15.00 C, in hundredths of a degree.
 const uint16_t COOL_AT_OR_ABOVE = 2500; // 25.00 C.
-const uint16_t LIGHT_THRESHOLD = 300;  // Observed LDR range ~200 dark to ~450 bright.
-const uint16_t HIGH_DAYLIGHT_THRESHOLD = 400; // Calibrate against your own light.
-const uint8_t BLIND_OPEN_ANGLE = 20;   // Calibrate for the model's linkage.
+// Lower ADC means darker. Calibrate these thresholds using measured LDR values.
+constexpr uint16_t LIGHT_ON_THRESHOLD = 300;
+constexpr uint16_t LIGHT_OFF_THRESHOLD = 400;
+static_assert(LIGHT_ON_THRESHOLD < LIGHT_OFF_THRESHOLD,
+              "Lighting hysteresis requires ON < OFF");
+const uint16_t HIGH_DAYLIGHT_THRESHOLD = 500;
+const uint8_t BLIND_OPEN_ANGLE = 0;   // Calibrate for the model's linkage.
 const uint8_t BLIND_CLOSED_ANGLE = 90;
 
 // LCD RS, E, D4, D5, D6, D7. LCD R/W goes to GND.
@@ -24,10 +27,8 @@ uint16_t sensorDaylight = 0;
 bool sensorMotion = false;
 bool lastReportedMotion = false;
 bool sensorTempValid = false;
-bool previousOccupied = false;
-bool gracePending = false;
+bool roomOccupied = false;
 bool hvacActive = false;
-uint32_t emptySince = 0;
 uint32_t lastControl = 0;
 uint32_t lastDisplay = 0;
 uint32_t lastPrint = 0;
@@ -35,26 +36,18 @@ bool sensorLinkOk = false;
 bool samplingLinkOk = false;
 bool serviceLinkOk = false;
 uint8_t selectedHvac = 0;
-uint8_t selectedLight = 0;
+uint8_t selectedLight = 0; // Persistent LED state; starts off and survives loop().
 uint8_t selectedBlind = BLIND_OPEN_ANGLE;
 
-bool updateHvacActive(bool occupied, uint32_t now) {
-  if (occupied) {
-    hvacActive = true;
-    gracePending = false;
-  } else {
-    if (previousOccupied) {
-      emptySince = now;
-      gracePending = true;
-    }
-    hvacActive = gracePending &&
-                 uint32_t(now - emptySince) < EMPTY_ROOM_DELAY_MS;
-    if (!hvacActive) gracePending = false;
-  }
-  previousOccupied = occupied;
-  return hvacActive;
-}
+bool sensingAvailable = false;
+bool servicesAvailable = false;
 
+// Monitor existing communication results without extra traffic or output.
+// This checks board communication, not physical component connections.
+void monitorSystemComponents() {
+  sensingAvailable = sensorLinkOk && samplingLinkOk;
+  servicesAvailable = serviceLinkOk;
+}
 uint8_t chooseHvac(bool active, bool validTemperature, uint16_t centiC) {
   if (!active) return 0;             // SLEEP: LEDs off.
   if (!validTemperature) return 1;   // Wait for a fresh sample; LEDs off.
@@ -64,11 +57,14 @@ uint8_t chooseHvac(bool active, bool validTemperature, uint16_t centiC) {
 }
 
 bool chooseLight(bool occupied, uint16_t lightReading) {
-  return occupied && lightReading < LIGHT_THRESHOLD;
+  if (!occupied) return false;
+  if (lightReading <= LIGHT_ON_THRESHOLD) return true;
+  if (lightReading >= LIGHT_OFF_THRESHOLD) return false;
+  return selectedLight != 0; // Preserve state in the 301..399 ADC band.
 }
 
-uint8_t chooseBlind(uint16_t lightReading) {
-  return lightReading >= HIGH_DAYLIGHT_THRESHOLD ?
+uint8_t chooseBlind(bool occupied, uint16_t lightReading) {
+  return occupied && lightReading > HIGH_DAYLIGHT_THRESHOLD ?
          BLIND_CLOSED_ANGLE : BLIND_OPEN_ANGLE;
 }
 
@@ -126,8 +122,7 @@ void printLcdRow(uint8_t row, const char* text) {
   while (i++ < 16) lcd.write(uint8_t(' '));
 }
 
-void refreshLcd(uint32_t now) {
-  // Format with room for every uint16_t value; printLcdRow limits output to 16.
+void refreshLcd() {
   char line[24];
   if (sensorLinkOk && sensorTempValid) {
     snprintf(line, sizeof(line), "T:%2u.%02uC N:%03u", unsigned(sensorTemp / 100),
@@ -136,21 +131,12 @@ void refreshLcd(uint32_t now) {
     snprintf(line, sizeof(line), "T:--.--C N:%03u", unsigned(sensorPeople));
   }
   printLcdRow(0, line);
-  if (!sensorLinkOk) {
-    printLcdRow(1, "SENSOR I2C ERROR");
-  } else if (!samplingLinkOk) {
-    printLcdRow(1, "SENSOR CMD ERROR");
-  } else if (!serviceLinkOk) {
-    printLcdRow(1, "SERVICE I2C ERR");
-  } else if (gracePending && hvacActive) {
-    const uint32_t elapsed = uint32_t(now - emptySince);
-    const uint16_t seconds = elapsed >= EMPTY_ROOM_DELAY_MS ? 0 :
-                            uint16_t((EMPTY_ROOM_DELAY_MS - elapsed + 999) / 1000);
-    snprintf(line, sizeof(line), "WAIT:%2us L%u B%u", unsigned(seconds),
-             unsigned(selectedLight), unsigned(selectedBlind == BLIND_CLOSED_ANGLE));
-    printLcdRow(1, line);
-  } else {
-    snprintf(line, sizeof(line), "%c %s L%u B%u", sensorPeople > 0 ? 'O' : 'U',
+  // Show communication faults; detailed readings remain in Serial Monitor.
+  if (!sensorLinkOk) printLcdRow(1, "SENSOR I2C ERROR");
+  else if (!samplingLinkOk) printLcdRow(1, "SENSOR CMD ERROR");
+  else if (!serviceLinkOk) printLcdRow(1, "SERVICE I2C ERR");
+  else {
+    snprintf(line, sizeof(line), "%c %s L%u B%u", roomOccupied ? 'O' : 'U',
              hvacName(selectedHvac), unsigned(selectedLight),
              unsigned(selectedBlind == BLIND_CLOSED_ANGLE));
     printLcdRow(1, line);
@@ -167,6 +153,7 @@ void setup() {
   // Uno R3: use the current Arduino AVR Boards package (tested with 1.8.8).
   Wire.setWireTimeout(25000, true); // 25 ms timeout, reset the I2C hardware.
   lastControl = uint32_t(millis()) - CONTROL_INTERVAL_MS;
+  Serial.println();
   Serial.println(F("Arduino 2: sensing=0x08 services=0x09"));
 }
 
@@ -178,45 +165,45 @@ void loop() {
     if (sensorLinkOk) {
       if (sensorMotion != lastReportedMotion) {
         lastReportedMotion = sensorMotion;
-        Serial.print(F("PIR changed: "));
-        Serial.println(sensorMotion ? 1 : 0);
       }
-      const bool occupied = sensorPeople > 0;
-      updateHvacActive(occupied, now);
+      // A positive count keeps the room active even without PIR motion.
+      roomOccupied = (sensorPeople > 0) || sensorMotion;
+      hvacActive = roomOccupied;
+      const bool occupied = roomOccupied;
       samplingLinkOk = sendSamplingCommand(hvacActive);
       selectedHvac = chooseHvac(hvacActive, sensorTempValid && samplingLinkOk, sensorTemp);
       selectedLight = chooseLight(occupied, sensorDaylight) ? 1 : 0;
-      // High daylight controls the blind even in an empty room.
-      selectedBlind = chooseBlind(sensorDaylight);
+      // Close only when occupied and daylight is strictly above 500 ADC.
+      selectedBlind = chooseBlind(occupied, sensorDaylight);
     } else {
-      // A sensor fault ends the grace period. Recovery with zero people must
-      // stay asleep; a confirmed positive count can wake the system again.
-      previousOccupied = false;
-      gracePending = false;
+      // A sensor fault clears occupancy; valid count or motion can wake it again.
+      roomOccupied = false;
       hvacActive = false;
       samplingLinkOk = sendSamplingCommand(false);
       selectedLight = 0;
       selectedHvac = 0;
-      // No valid daylight reading: hold the last blind command.
+      selectedBlind = BLIND_OPEN_ANGLE;
     }
     serviceLinkOk = sendServiceCommands(selectedLight, selectedHvac, selectedBlind);
+    monitorSystemComponents();
   }
   if (uint32_t(now - lastDisplay) >= 250) {
     lastDisplay = now;
-    refreshLcd(now);
+    refreshLcd();
   }
   if (uint32_t(now - lastPrint) >= 1000) {
     lastPrint = now;
     Serial.print(F("People=")); Serial.print(sensorPeople);
     Serial.print(F(" PIR=")); Serial.print(sensorMotion);
     Serial.print(F(" LDR=")); Serial.print(sensorDaylight);
+    Serial.print(F(" Light=")); Serial.print(selectedLight ? F("ON") : F("OFF"));
     Serial.print(F(" Temp="));
     if (sensorLinkOk && sensorTempValid) Serial.print(sensorTemp / 100.0, 2);
     else Serial.print(F("--"));
     Serial.print(F(" HVAC=")); Serial.print(hvacName(selectedHvac));
-    Serial.print(F(" Light=")); Serial.print(selectedLight);
-    Serial.print(F(" Blind=")); Serial.print(selectedBlind);
-    Serial.print(F(" Sensor/Service=")); Serial.print(sensorLinkOk);
-    Serial.print('/'); Serial.println(serviceLinkOk);
+    Serial.print(F(" Blind=")); Serial.print(selectedBlind == BLIND_CLOSED_ANGLE ? 1 : 0);
+    Serial.print(F(" Angle=")); Serial.print(selectedBlind);
+    Serial.print(F(" Sensor/Service=")); Serial.print(sensingAvailable);
+    Serial.print('/'); Serial.println(servicesAvailable);
   }
 }

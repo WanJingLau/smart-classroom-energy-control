@@ -15,6 +15,7 @@ const uint32_t CONTROLLER_TIMEOUT_MS = 2500;
 const uint8_t FRAME_SIZE = 8;
 
 uint16_t peopleCount = 0;
+uint16_t potentiometerRaw = 0;
 uint16_t temperatureCentiC = 0;
 uint16_t daylightValue = 0;
 bool motionDetected = false;
@@ -105,6 +106,7 @@ void setup() {
   Wire.begin(SENSOR_ADDRESS);
   Wire.onRequest(sendReadings);
   Wire.onReceive(receiveSamplingCommand);
+  Serial.println(); // Start each run on a fresh line in Serial Monitor.
   Serial.println(F("Arduino 1 sensing: 0x08; +D3 / -D4"));
 }
 
@@ -140,7 +142,8 @@ void loop() {
     lastSample = now;
     daylightValue = readAverage(LDR_PIN);
     if (temperatureEnabled) {
-      temperatureCentiC = convertTemperature(readAverage(TEMPERATURE_PIN));
+      potentiometerRaw = readAverage(TEMPERATURE_PIN);
+      temperatureCentiC = convertTemperature(potentiometerRaw);
       temperatureValid = true;
     }
   }
@@ -151,8 +154,13 @@ void loop() {
     Serial.print(F("People=")); Serial.print(peopleCount);
     Serial.print(F(" PIR=")); Serial.print(motionDetected);
     Serial.print(F(" LDR=")); Serial.print(daylightValue);
-    Serial.print(F(" Temp="));
-    if (temperatureValid) Serial.println(temperatureCentiC / 100.0, 2);
-    else Serial.println(F("SLEEP"));
+    Serial.print(F(" PotRaw="));
+    if (temperatureValid) {
+      Serial.print(potentiometerRaw);
+      Serial.print(F(" Temp="));
+      Serial.println(temperatureCentiC / 100.0, 2);
+    } else {
+      Serial.println(F("-- Temp=SLEEP"));
+    }
   }
 }
